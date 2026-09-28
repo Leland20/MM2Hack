@@ -573,9 +573,22 @@ ESPSection:addSlider({
 
 local weaponCache = {}
 local espObjects = {}
-local espScreenGui = Instance.new("ScreenGui")
-espScreenGui.Name = "ESPScreenGui"
-espScreenGui.Parent = player.PlayerGui
+local espScreenGui = nil
+
+-- ScreenGui darf beim Respawn (neue Runde) nicht zerstört werden,
+-- und wird bei Bedarf neu erstellt
+local function ensureEspGui()
+    if espScreenGui and espScreenGui.Parent then
+        return espScreenGui
+    end
+    espScreenGui = Instance.new("ScreenGui")
+    espScreenGui.Name = "ESPScreenGui"
+    espScreenGui.ResetOnSpawn = false
+    espScreenGui.DisplayOrder = 500
+    espScreenGui.Parent = player:WaitForChild("PlayerGui")
+    return espScreenGui
+end
+ensureEspGui()
 
 local function updateWeaponCacheForPlayer(plr)
     if plr == player then weaponCache[plr] = nil return end
@@ -653,7 +666,7 @@ local function createESPForPlayer(plr)
     local frame = Instance.new("Frame")
     frame.Size = UDim2.new(0, 200, 0, 30)
     frame.BackgroundTransparency = 1
-    frame.Parent = espScreenGui
+    frame.Parent = ensureEspGui()
 
     local text = Instance.new("TextLabel")
     text.Size = UDim2.new(1, 0, 1, 0)
@@ -690,7 +703,7 @@ function updateESP()
                 removeESPForPlayer(plr)
             else
                 local data = espObjects[plr]
-                if not data or data.Character ~= char or not data.Highlight.Parent then
+                if not data or data.Character ~= char or not data.Highlight.Parent or not data.Frame.Parent then
                     createESPForPlayer(plr)
                     data = espObjects[plr]
                 end
@@ -736,6 +749,23 @@ local function espMainLoop()
     while true do wait(0.5) updateESP() end
 end
 coroutine.wrap(espMainLoop)()
+
+-- Alle 3 Minuten und 10 Sekunden (190 s) werden die Namen komplett neu erstellt
+local ESP_REFRESH_INTERVAL = 190
+task.spawn(function()
+    while true do
+        task.wait(ESP_REFRESH_INTERVAL)
+        if ESPEnabled then
+            clearAllESP()
+            if espScreenGui then
+                espScreenGui:Destroy()
+                espScreenGui = nil
+            end
+            ensureEspGui()
+            updateESP()
+        end
+    end
+end)
 
 game.Players.PlayerAdded:Connect(function(newPlayer)
     wait(0.2)
