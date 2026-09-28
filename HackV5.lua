@@ -43,8 +43,18 @@ notifyLayout.VerticalAlignment = Enum.VerticalAlignment.Bottom
 notifyLayout.Padding = UDim.new(0, 8)
 notifyLayout.Parent = notifyHolder
 
+local activeNotes = {}   -- offene Popups (ältestes zuerst)
+local noteCounter = 0
+local MAX_NOTES = 3
+
 local function Notify(title, text, duration)
-    duration = duration or 5
+    duration = duration or 3
+
+    -- Maximal 3 Popups: das älteste wird geschlossen, das neueste bleibt
+    while #activeNotes >= MAX_NOTES do
+        activeNotes[1]()
+    end
+    noteCounter = noteCounter + 1
 
     local box = Instance.new("TextButton")
     box.Size = UDim2.new(1, 0, 0, 70)
@@ -53,6 +63,7 @@ local function Notify(title, text, duration)
     box.AutoButtonColor = false
     box.Text = ""
     box.ClipsDescendants = true
+    box.LayoutOrder = noteCounter
     box.Parent = notifyHolder
 
     local boxCorner = Instance.new("UICorner")
@@ -102,8 +113,11 @@ local function Notify(title, text, duration)
     local function close()
         if closed then return end
         closed = true
+        local idx = table.find(activeNotes, close)
+        if idx then table.remove(activeNotes, idx) end
         box:Destroy()
     end
+    table.insert(activeNotes, close)
 
     box.MouseButton1Click:Connect(close) -- Klick = sofort schließen
 
@@ -114,9 +128,9 @@ local function Notify(title, text, duration)
     task.delay(duration, close)
 end
 
--- Ersetzt das alte Venyx-Popup: alle UI:Notify(...) Aufrufe nutzen jetzt das neue (10 Sek.)
+-- Ersetzt das alte Venyx-Popup: alle UI:Notify(...) Aufrufe nutzen jetzt das neue (3 Sek.)
 function UI:Notify(data)
-    Notify(data.title or "Info", data.text or "", 10)
+    Notify(data.title or "Info", data.text or "", 3)
 end
 -- ==================== ENDE POPUP ====================
 
@@ -411,14 +425,14 @@ local function setFly(value)
     flyEnabled = value
     if value then startFly() else stopFly() end
     pcall(function() MoveSection:updateToggle(flyToggle, nil, value) end)
-    Notify("Fly", value and "Fly aktiviert (C)" or "Fly deaktiviert (C)", 10)
+    Notify("Fly", value and "Fly aktiviert (C)" or "Fly deaktiviert (C)", 3)
 end
 
 local function setNoclip(value)
     noclipEnabled = value
     if value then startNoclip() else stopNoclip() end
     pcall(function() MoveSection:updateToggle(noclipToggle, nil, value) end)
-    Notify("Noclip", value and "Noclip aktiviert (X)" or "Noclip deaktiviert (X)", 10)
+    Notify("Noclip", value and "Noclip aktiviert (X)" or "Noclip deaktiviert (X)", 3)
 end
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
@@ -446,161 +460,6 @@ player.CharacterAdded:Connect(function()
     if flyEnabled then startFly() end
 end)
 -- ==================== ENDE NOCLIP & FLY ====================
-
--- ==================== INVISIBILITY ====================
-local InvisSection = PlayerPage:addSection({ title = "Invisibility" })
-
-local invisEnabled = false
-local invisSeat = nil
-
--- Nur den Sitz entfernen (z. B. beim Respawn)
-local function clearInvisSeat()
-    if invisSeat then
-        invisSeat:Destroy()
-        invisSeat = nil
-    end
-end
-
--- Wieder sichtbar werden, ohne Respawn
-local function disableInvis()
-    local char = player.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    local pos = root and root.CFrame
-
-    clearInvisSeat()
-
-    if root and pos then
-        root.AssemblyLinearVelocity = Vector3.zero
-        root.CFrame = pos + Vector3.new(0, 3, 0)
-    end
-    if hum then
-        hum.Sit = false
-        hum.PlatformStand = flyEnabled -- Fly nicht kaputt machen
-        hum:ChangeState(Enum.HumanoidStateType.GettingUp)
-    end
-end
-
-local function enableInvis()
-    clearInvisSeat()
-    local char = player.Character
-    if not char then return false end
-    local root = char:FindFirstChild("HumanoidRootPart")
-    local torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
-    if not root or not torso then return false end
-
-    local savedCF = root.CFrame
-
-    local seat = Instance.new("Seat")
-    seat.Name = "InvisSeat"
-    seat.Anchored = false
-    seat.CanCollide = false
-    seat.Transparency = 1
-    seat.Position = Vector3.new(0, -400, 0) -- weit weg im Void
-    seat.Parent = workspace
-
-    local weld = Instance.new("Weld")
-    weld.Part0 = seat
-    weld.Part1 = torso
-    weld.Parent = seat
-
-    task.wait()
-    seat.CFrame = savedCF
-    invisSeat = seat
-    return true
-end
-
-local invisToggle = InvisSection:addToggle({
-    title = "Invisibility",
-    callback = function(value)
-        invisEnabled = value
-        if value then
-            local ok = enableInvis()
-            if not ok then
-                invisEnabled = false
-                UI:Notify({ title = "Invisibility", text = "Charakter nicht bereit!" })
-            else
-                UI:Notify({ title = "Invisibility", text = "Du bist jetzt unsichtbar." })
-            end
-        else
-            disableInvis()
-            UI:Notify({ title = "Invisibility", text = "Du bist wieder sichtbar." })
-        end
-    end
-})
-
--- Nach Respawn: alten Sitz weg, bei aktivem Toggle neu setzen
-player.CharacterAdded:Connect(function()
-    task.wait(0.6)
-    clearInvisSeat()
-    if invisEnabled then enableInvis() end
-end)
--- ==================== ENDE INVISIBILITY ====================
-
--- ==================== GODMODE ====================
-local GodSection = PlayerPage:addSection({ title = "Godmode" })
-
-local godEnabled = false
-local godConn = nil
-local godFF = nil
-
-local function removeGod()
-    if godConn then godConn:Disconnect() godConn = nil end
-    if godFF then godFF:Destroy() godFF = nil end
-    local char = player.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if hum then
-        hum.MaxHealth = 100
-        hum.Health = 100
-    end
-end
-
-local function applyGod()
-    local char = player.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if not hum then return false end
-
-    if godConn then godConn:Disconnect() godConn = nil end
-    if godFF then godFF:Destroy() godFF = nil end
-
-    hum.MaxHealth = math.huge
-    hum.Health = math.huge
-
-    godConn = hum.HealthChanged:Connect(function()
-        if godEnabled and hum.Health < hum.MaxHealth then
-            hum.Health = hum.MaxHealth
-        end
-    end)
-
-    godFF = Instance.new("ForceField")
-    godFF.Visible = false
-    godFF.Parent = char
-    return true
-end
-
-GodSection:addToggle({
-    title = "Godmode",
-    callback = function(value)
-        godEnabled = value
-        if value then
-            if applyGod() then
-                UI:Notify({ title = "Godmode", text = "Godmode aktiviert." })
-            else
-                godEnabled = false
-                UI:Notify({ title = "Godmode", text = "Charakter nicht bereit!" })
-            end
-        else
-            removeGod()
-            UI:Notify({ title = "Godmode", text = "Godmode deaktiviert." })
-        end
-    end
-})
-
-player.CharacterAdded:Connect(function()
-    task.wait(0.6)
-    if godEnabled then applyGod() end
-end)
--- ==================== ENDE GODMODE ====================
 
 local CombatPage = UI:addPage({ title = "Combat", icon = 6187718252 })
 local ESPSection = CombatPage:addSection({ title = "ESP Settings" })
@@ -1592,7 +1451,7 @@ MonoSection:addToggle({
 -- ==================== ABOUT TAB ====================
 local AboutInfo = {
     Creator = "Leland",
-    Version = "v1.2.0",            -- <- bei jedem Update ändern
+    Version = "v1.1.0",            -- <- bei jedem Update ändern
     Updated = "28.09.2026",        -- <- Datum des letzten Updates
     Game    = "Murder Mystery 2",
     Discord = "discord.gg/rSkMxB5bx7"
@@ -1626,7 +1485,7 @@ local function featureLine(text)
     })
 end
 
-featureLine("Player: Speed, Jump, Gravity, Noclip, Fly, Invisibility, Godmode")
+featureLine("Player: Speed, Jump, Gravity, Noclip, Fly")
 featureLine("Combat: Spieler-ESP, GunDrop-ESP, Aimbot")
 featureLine("Visuals: Fog, Transparenz, FOV, Monochrome")
 
