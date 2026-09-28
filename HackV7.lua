@@ -335,20 +335,12 @@ local noclipToggle = MoveSection:addToggle({
     end
 })
 
--- ---------- FLY (ohne Superman-Pose) ----------
+-- ---------- FLY ----------
 local flyEnabled = false
 local flySpeed = 50
 local flyConnection = nil
-local flyBV = nil
+local flyBV, flyBG = nil, nil
 local flyUp, flyDown = false, false
-local flyStatesDisabled = false
-
-local FLY_DISABLED_STATES = {
-    Enum.HumanoidStateType.Freefall,
-    Enum.HumanoidStateType.Jumping,
-    Enum.HumanoidStateType.FallingDown,
-    Enum.HumanoidStateType.Flying,
-}
 
 local function stopFly()
     if flyConnection then
@@ -356,16 +348,10 @@ local function stopFly()
         flyConnection = nil
     end
     if flyBV then flyBV:Destroy() flyBV = nil end
-
+    if flyBG then flyBG:Destroy() flyBG = nil end
     local char = player.Character
     local humanoid = char and char:FindFirstChildOfClass("Humanoid")
     if humanoid then
-        if flyStatesDisabled then
-            for _, state in ipairs(FLY_DISABLED_STATES) do
-                humanoid:SetStateEnabled(state, true)
-            end
-            flyStatesDisabled = false
-        end
         humanoid.PlatformStand = false
         humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
     end
@@ -379,18 +365,18 @@ local function startFly()
     local root = char:FindFirstChild("HumanoidRootPart")
     if not humanoid or not root then return end
 
-    -- Kein PlatformStand und kein BodyGyro:
-    -- normale Animationen, Charakter bleibt aufrecht
-    for _, state in ipairs(FLY_DISABLED_STATES) do
-        humanoid:SetStateEnabled(state, false)
-    end
-    flyStatesDisabled = true
-    humanoid:ChangeState(Enum.HumanoidStateType.Running)
+    humanoid.PlatformStand = true
 
     flyBV = Instance.new("BodyVelocity")
     flyBV.MaxForce = Vector3.new(9e9, 9e9, 9e9)
     flyBV.Velocity = Vector3.zero
     flyBV.Parent = root
+
+    flyBG = Instance.new("BodyGyro")
+    flyBG.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+    flyBG.P = 9e4
+    flyBG.CFrame = root.CFrame
+    flyBG.Parent = root
 
     flyConnection = runService.RenderStepped:Connect(function()
         if not flyEnabled or not root.Parent then return end
@@ -413,11 +399,7 @@ local function startFly()
         end
 
         flyBV.Velocity = velocity
-
-        -- Falls das Spiel den State ändert, wieder auf Running setzen
-        if humanoid:GetState() ~= Enum.HumanoidStateType.Running then
-            humanoid:ChangeState(Enum.HumanoidStateType.Running)
-        end
+        flyBG.CFrame = cam.CFrame
     end)
 end
 
