@@ -44,7 +44,7 @@ notifyLayout.Padding = UDim.new(0, 8)
 notifyLayout.Parent = notifyHolder
 
 local function Notify(title, text, duration)
-    duration = duration or 10
+    duration = duration or 5
 
     local box = Instance.new("TextButton")
     box.Size = UDim2.new(1, 0, 0, 70)
