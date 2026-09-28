@@ -1377,7 +1377,7 @@ ExtraSection:addButton({
     title = "Version kopieren",
     callback = function()
         if setclipboard then
-            setclipboard("Rufu MM2 " .. AboutInfo.Version)
+            setclipboard("LelandHack " .. AboutInfo.Version)
             UI:Notify({ title = "About", text = "Version kopiert!", duration = 2 })
         end
     end
@@ -1414,7 +1414,7 @@ local function getMainFrame()
     local roots = { (gethui and gethui()) or CoreGui, CoreGui, player:FindFirstChild("PlayerGui") }
     for _, root in ipairs(roots) do
         if root then
-            local gui = root:FindFirstChild("Rufu MM2")
+            local gui = root:FindFirstChild("Leland Hack")
             if gui and gui:FindFirstChild("Main") then
                 return gui.Main
             end
