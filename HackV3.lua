@@ -1306,7 +1306,7 @@ local AboutInfo = {
     Version = "v1.0.0",            -- <- bei jedem Update ändern
     Updated = "28.09.2026",        -- <- Datum des letzten Updates
     Game    = "Murder Mystery 2",
-    Discord = "discord.gg/DEIN-LINK" -- <- optional, sonst leer lassen: ""
+    Discord = "discord.gg/rSkMxB5bx7" -- <- optional, sonst leer lassen: ""
 }
 
 local AboutPage = UI:addPage({ title = "About", icon = 7992557358 })
@@ -1321,7 +1321,7 @@ local function infoLine(text)
     })
 end
 
-infoLine("Name: Rufu MM2")
+infoLine("Name: Leland Hack")
 infoLine("Erstellt von: " .. AboutInfo.Creator)
 infoLine("Version: " .. AboutInfo.Version)
 infoLine("Letztes Update: " .. AboutInfo.Updated)
