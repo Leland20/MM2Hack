@@ -335,12 +335,20 @@ local noclipToggle = MoveSection:addToggle({
     end
 })
 
--- ---------- FLY ----------
+-- ---------- FLY (ohne Superman-Pose) ----------
 local flyEnabled = false
 local flySpeed = 50
 local flyConnection = nil
-local flyBV, flyBG = nil, nil
+local flyBV = nil
 local flyUp, flyDown = false, false
+local flyStatesDisabled = false
+
+local FLY_DISABLED_STATES = {
+    Enum.HumanoidStateType.Freefall,
+    Enum.HumanoidStateType.Jumping,
+    Enum.HumanoidStateType.FallingDown,
+    Enum.HumanoidStateType.Flying,
+}
 
 local function stopFly()
     if flyConnection then
@@ -348,10 +356,16 @@ local function stopFly()
         flyConnection = nil
     end
     if flyBV then flyBV:Destroy() flyBV = nil end
-    if flyBG then flyBG:Destroy() flyBG = nil end
+
     local char = player.Character
     local humanoid = char and char:FindFirstChildOfClass("Humanoid")
     if humanoid then
+        if flyStatesDisabled then
+            for _, state in ipairs(FLY_DISABLED_STATES) do
+                humanoid:SetStateEnabled(state, true)
+            end
+            flyStatesDisabled = false
+        end
         humanoid.PlatformStand = false
         humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
     end
@@ -365,18 +379,18 @@ local function startFly()
     local root = char:FindFirstChild("HumanoidRootPart")
     if not humanoid or not root then return end
 
-    humanoid.PlatformStand = true
+    -- Kein PlatformStand und kein BodyGyro:
+    -- normale Animationen, Charakter bleibt aufrecht
+    for _, state in ipairs(FLY_DISABLED_STATES) do
+        humanoid:SetStateEnabled(state, false)
+    end
+    flyStatesDisabled = true
+    humanoid:ChangeState(Enum.HumanoidStateType.Running)
 
     flyBV = Instance.new("BodyVelocity")
     flyBV.MaxForce = Vector3.new(9e9, 9e9, 9e9)
     flyBV.Velocity = Vector3.zero
     flyBV.Parent = root
-
-    flyBG = Instance.new("BodyGyro")
-    flyBG.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
-    flyBG.P = 9e4
-    flyBG.CFrame = root.CFrame
-    flyBG.Parent = root
 
     flyConnection = runService.RenderStepped:Connect(function()
         if not flyEnabled or not root.Parent then return end
@@ -399,7 +413,11 @@ local function startFly()
         end
 
         flyBV.Velocity = velocity
-        flyBG.CFrame = cam.CFrame
+
+        -- Falls das Spiel den State ändert, wieder auf Running setzen
+        if humanoid:GetState() ~= Enum.HumanoidStateType.Running then
+            humanoid:ChangeState(Enum.HumanoidStateType.Running)
+        end
     end)
 end
 
@@ -1481,6 +1499,7 @@ MonoSection:addToggle({
 -- ==================== UTILITY TAB ====================
 local UtilityPage = UI:addPage({ title = "Utility", icon = 7992557358 })
 local TeleportSection = UtilityPage:addSection({ title = "Teleport zu Spielern" })
+local BringSection = UtilityPage:addSection({ title = "Spieler zu mir holen" })
 
 local selectedPlayerName = nil
 local playerDropdown = nil
@@ -1504,40 +1523,123 @@ local function findPlayerByName(name)
     return nil
 end
 
-local function teleportToPlayer(plr)
-    if not plr then
-        UI:Notify({ title = "Teleport", text = "Kein Spieler ausgewählt!", duration = 2 })
-        return
-    end
-    local myChar = player.Character
-    local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
-    if not myRoot then
-        UI:Notify({ title = "Teleport", text = "Dein Charakter ist nicht bereit!", duration = 2 })
-        return
-    end
-    local targetChar = plr.Character
-    local targetRoot = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
-    if not targetRoot then
-        UI:Notify({ title = "Teleport", text = plr.Name .. " hat keinen Charakter!", duration = 2 })
-        return
-    end
-    -- 3 Studs hinter den Spieler
-    myRoot.CFrame = targetRoot.CFrame * CFrame.new(0, 0, 3)
-    UI:Notify({ title = "Teleport", text = "Zu " .. plr.Name .. " teleportiert!", duration = 2 })
+-- Hilfsfunktion: Root + Humanoid eines Spielers holen (nur wenn lebendig)
+local function getRootAndHumanoid(plr)
+    local char = plr and plr.Character
+    if not char then return nil, nil end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not root then return nil, nil end
+    if hum and hum.Health <= 0 then return nil, nil end
+    return root, hum
 end
 
-local function bringPlayerToMe(plr)
-    if not plr then return false end
-    local myChar = player.Character
-    local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
-    local targetChar = plr.Character
-    local targetRoot = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
+-- ---------- Teleport zu Spieler ----------
+local function teleportToPlayer(plr)
+    if not plr then
+        UI:Notify({ title = "Teleport", text = "Kein Spieler ausgewählt!" })
+        return
+    end
+    local myRoot = getRootAndHumanoid(player)
+    if not myRoot then
+        UI:Notify({ title = "Teleport", text = "Dein Charakter ist nicht bereit!" })
+        return
+    end
+    local targetRoot = getRootAndHumanoid(plr)
+    if not targetRoot then
+        UI:Notify({ title = "Teleport", text = plr.Name .. " hat keinen lebenden Charakter!" })
+        return
+    end
+    -- 3 Studs hinter den Spieler, mit Velocity-Reset
+    myRoot.CFrame = targetRoot.CFrame * CFrame.new(0, 0, 3)
+    myRoot.AssemblyLinearVelocity = Vector3.zero
+    UI:Notify({ title = "Teleport", text = "Zu " .. plr.Name .. " teleportiert!" })
+end
+
+-- ---------- Spieler zu mir holen (verbessert) ----------
+-- Probleme vorher: Position wurde nur EINMAL gesetzt, dadurch sprang der Spieler
+-- sofort zurück; alle Spieler landeten auf demselben Punkt (Kollisionen / Ruckeln);
+-- Sitzende und tote Spieler wurden nicht beachtet; Restgeschwindigkeit schleuderte sie weg.
+-- Jetzt: Position wird für einige Sekunden jeden Frame gehalten, Velocity wird
+-- genullt, Sitzen wird beendet, und bei "Alle" werden die Spieler im Kreis verteilt.
+local bringHoldTime = 2          -- Sekunden, die die Position gehalten wird
+local bringDistance = 6          -- Abstand vor dir in Studs
+local bringConnections = {}      -- [Spieler] = Heartbeat-Connection
+local loopBringEnabled = false
+local loopBringConnection = nil
+
+local function stopBring(plr)
+    local conn = bringConnections[plr]
+    if conn then
+        conn:Disconnect()
+        bringConnections[plr] = nil
+    end
+end
+
+local function stopAllBring()
+    for plr in pairs(bringConnections) do
+        stopBring(plr)
+    end
+end
+
+-- offset: Vector3 relativ zu deiner Position (Standard: direkt vor dich)
+-- duration: wie lange die Position gehalten wird (nil = bringHoldTime, math.huge = dauerhaft)
+local function bringPlayerToMe(plr, offset, duration)
+    if not plr or plr == player then return false end
+
+    local myRoot = getRootAndHumanoid(player)
+    local targetRoot, targetHum = getRootAndHumanoid(plr)
     if not myRoot or not targetRoot then return false end
-    -- 4 Studs vor dich
-    targetRoot.CFrame = myRoot.CFrame * CFrame.new(0, 0, -4)
+
+    offset = offset or Vector3.new(0, 0, -bringDistance)
+    duration = duration or bringHoldTime
+
+    stopBring(plr)
+
+    -- Sitzende Spieler (z.B. Fahrzeug) erst aufstehen lassen
+    if targetHum and targetHum.SeatPart then
+        pcall(function() targetHum.Sit = false end)
+    end
+
+    local endTime = os.clock() + duration
+    bringConnections[plr] = runService.Heartbeat:Connect(function()
+        local mr = getRootAndHumanoid(player)
+        local tr = getRootAndHumanoid(plr)
+        -- Abbrechen, wenn jemand stirbt / verschwindet oder die Zeit um ist
+        if not mr or not tr or os.clock() >= endTime then
+            stopBring(plr)
+            return
+        end
+        tr.CFrame = mr.CFrame * CFrame.new(offset)
+        tr.AssemblyLinearVelocity = Vector3.zero
+        tr.AssemblyAngularVelocity = Vector3.zero
+    end)
+
     return true
 end
 
+-- Alle Spieler im Kreis um dich verteilen
+local function bringAllPlayers()
+    local list = {}
+    for _, plr in ipairs(game.Players:GetPlayers()) do
+        if plr ~= player and getRootAndHumanoid(plr) then
+            table.insert(list, plr)
+        end
+    end
+    local n = #list
+    local count = 0
+    for i, plr in ipairs(list) do
+        local angle = (2 * math.pi / n) * (i - 1)
+        -- Kreis nach vorne versetzt, damit niemand in dir steckt
+        local offset = Vector3.new(math.cos(angle) * bringDistance, 0, math.sin(angle) * bringDistance - bringDistance)
+        if bringPlayerToMe(plr, offset) then
+            count = count + 1
+        end
+    end
+    return count
+end
+
+-- ---------- Dropdown ----------
 local okDropdown, dropdownObj = pcall(function()
     return TeleportSection:addDropdown({
         title = "Spieler auswählen",
@@ -1566,6 +1668,17 @@ local function refreshPlayerList()
     end
 end
 
+-- Liste automatisch aktuell halten, wenn jemand joint / geht
+game.Players.PlayerAdded:Connect(function()
+    task.wait(0.5)
+    refreshPlayerList()
+end)
+game.Players.PlayerRemoving:Connect(function(plr)
+    stopBring(plr)
+    task.wait(0.2)
+    refreshPlayerList()
+end)
+
 -- Falls das Menü kein Dropdown kennt: Spieler per Button durchschalten
 if not okDropdown then
     TeleportSection:addButton({
@@ -1573,12 +1686,12 @@ if not okDropdown then
         callback = function()
             local names = getPlayerNames()
             if #names == 0 then
-                UI:Notify({ title = "Teleport", text = "Keine anderen Spieler da!", duration = 2 })
+                UI:Notify({ title = "Teleport", text = "Keine anderen Spieler da!" })
                 return
             end
             local idx = selectedPlayerName and table.find(names, selectedPlayerName) or 0
             selectedPlayerName = names[(idx % #names) + 1]
-            UI:Notify({ title = "Ausgewählt", text = selectedPlayerName, duration = 2 })
+            UI:Notify({ title = "Ausgewählt", text = selectedPlayerName })
         end
     })
 end
@@ -1595,7 +1708,7 @@ TeleportSection:addButton({
     callback = function()
         local names = getPlayerNames()
         if #names == 0 then
-            UI:Notify({ title = "Teleport", text = "Keine anderen Spieler da!", duration = 2 })
+            UI:Notify({ title = "Teleport", text = "Keine anderen Spieler da!" })
             return
         end
         teleportToPlayer(findPlayerByName(names[math.random(1, #names)]))
@@ -1603,46 +1716,102 @@ TeleportSection:addButton({
 })
 
 TeleportSection:addButton({
+    title = "Spielerliste aktualisieren",
+    callback = function()
+        refreshPlayerList()
+        UI:Notify({ title = "Teleport", text = "Spielerliste aktualisiert!" })
+    end
+})
+
+-- ---------- Bring-Buttons ----------
+BringSection:addButton({
     title = "Ausgewählten Spieler zu mir holen",
     callback = function()
         local plr = findPlayerByName(selectedPlayerName)
         if not plr then
-            UI:Notify({ title = "Teleport", text = "Kein Spieler ausgewählt!", duration = 2 })
+            UI:Notify({ title = "Bring", text = "Kein Spieler ausgewählt!" })
         elseif bringPlayerToMe(plr) then
-            UI:Notify({ title = "Teleport", text = plr.Name .. " zu dir geholt!", duration = 2 })
+            UI:Notify({ title = "Bring", text = plr.Name .. " zu dir geholt!" })
         else
-            UI:Notify({ title = "Teleport", text = "Spieler oder Charakter nicht bereit!", duration = 2 })
+            UI:Notify({ title = "Bring", text = "Spieler ist tot oder nicht bereit!" })
         end
     end
 })
 
-TeleportSection:addButton({
+BringSection:addButton({
     title = "Alle Spieler zu mir holen",
     callback = function()
-        local count = 0
-        for _, plr in ipairs(game.Players:GetPlayers()) do
-            if plr ~= player and bringPlayerToMe(plr) then
-                count = count + 1
-            end
+        local count = bringAllPlayers()
+        if count > 0 then
+            UI:Notify({ title = "Bring", text = count .. " Spieler zu dir geholt!" })
+        else
+            UI:Notify({ title = "Bring", text = "Keine Spieler verfügbar!" })
         end
-        UI:Notify({ title = "Teleport", text = count .. " Spieler zu dir geholt!", duration = 2 })
     end
 })
 
-TeleportSection:addButton({
-    title = "Spielerliste aktualisieren",
+BringSection:addToggle({
+    title = "Dauerhaft holen (ausgewählter Spieler)",
+    callback = function(value)
+        loopBringEnabled = value
+        if loopBringConnection then
+            loopBringConnection:Disconnect()
+            loopBringConnection = nil
+        end
+        if value then
+            local plr = findPlayerByName(selectedPlayerName)
+            if not plr then
+                UI:Notify({ title = "Bring", text = "Kein Spieler ausgewählt!" })
+                loopBringEnabled = false
+                pcall(function() BringSection:updateToggle(nil, nil, false) end)
+                return
+            end
+            -- dauerhaft halten, bis Toggle aus / Spieler weg / tot
+            bringPlayerToMe(plr, nil, math.huge)
+        else
+            stopAllBring()
+        end
+    end
+})
+
+BringSection:addSlider({
+    title = "Halte-Dauer (Sekunden)",
+    default = 2,
+    min = 1,
+    max = 10,
+    callback = function(value)
+        bringHoldTime = value
+    end
+})
+
+BringSection:addSlider({
+    title = "Abstand vor mir (Studs)",
+    default = 6,
+    min = 3,
+    max = 20,
+    callback = function(value)
+        bringDistance = value
+    end
+})
+
+BringSection:addButton({
+    title = "Alle Holen-Aktionen stoppen",
     callback = function()
-        refreshPlayerList()
-        UI:Notify({ title = "Teleport", text = "Spielerliste aktualisiert!", duration = 2 })
+        stopAllBring()
+        UI:Notify({ title = "Bring", text = "Alles gestoppt!" })
     end
 })
 
+-- Bei eigenem Respawn laufende Bring-Aktionen sauber beenden
+player.CharacterAdded:Connect(function()
+    stopAllBring()
+end)
 -- ==================== ENDE UTILITY TAB ====================
 
 -- ==================== ABOUT TAB ====================
 local AboutInfo = {
     Creator = "Leland",
-    Version = "v1.2.1",            -- <- bei jedem Update ändern
+    Version = "v1.3.0",            -- <- bei jedem Update ändern
     Updated = "29.09.2026",        -- <- Datum des letzten Updates
     Game    = "Murder Mystery 2",
     Discord = "discord.gg/rSkMxB5bx7"
