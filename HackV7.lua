@@ -342,85 +342,15 @@ local flyConnection = nil
 local flyBV, flyBG = nil, nil
 local flyUp, flyDown = false, false
 
--- ---------- SUPERMAN-ANIMATION (per Motor6D, keine fremden Animation-IDs nötig) ----------
--- Fliegen  = waagerechte Superman-Haltung (Kopf voraus, Arme nach vorne gestreckt)
--- Schweben = aufrechte Superman-Idle-Haltung (leichte Vorlage, Fäuste an der Hüfte, sanftes Auf und Ab)
-local flyMotors = {}          -- [Gelenkname] = { motor = Motor6D, orig = ursprüngliches C0 }
-local poseBlend = 0           -- 0 = Idle (Schweben), 1 = Superman-Flug
-local smoothCF = nil          -- geglättete Körperausrichtung
-local flyAnimateScript = nil  -- Animate-Skript (wird während Fly pausiert)
-
-local JOINT_NAMES = { RightShoulder = true, LeftShoulder = true, RightHip = true, LeftHip = true }
-
-local IDLE_POSE = {
-    RightShoulder = CFrame.Angles(0.2, 0, 0.45),
-    LeftShoulder  = CFrame.Angles(0.2, 0, -0.45),
-    RightHip      = CFrame.Angles(0, 0, 0.04),
-    LeftHip       = CFrame.Angles(0, 0, -0.04),
-}
-local FLY_POSE = {
-    RightShoulder = CFrame.Angles(0, 0, math.pi - 0.12),
-    LeftShoulder  = CFrame.Angles(0, 0, -(math.pi - 0.12)),
-    RightHip      = CFrame.Angles(0, 0, 0.04),
-    LeftHip       = CFrame.Angles(0, 0, -0.04),
-}
-
-local function collectMotors(char)
-    flyMotors = {}
-    for _, m in ipairs(char:GetDescendants()) do
-        if m:IsA("Motor6D") then
-            local key = string.gsub(m.Name, " ", "") -- R6 ("Right Shoulder") und R15 ("RightShoulder")
-            if JOINT_NAMES[key] then
-                flyMotors[key] = { motor = m, orig = m.C0 }
-            end
-        end
-    end
-end
-
-local function restoreMotors()
-    for _, data in pairs(flyMotors) do
-        if data.motor and data.motor.Parent then
-            data.motor.C0 = data.orig
-        end
-    end
-    flyMotors = {}
-end
-
-local function setJointRotation(key, rot)
-    local data = flyMotors[key]
-    if not data or not data.motor.Parent then return end
-    local o = data.orig
-    -- Rotation um den Gelenkpunkt, im Raum des Eltern-Teils
-    data.motor.C0 = CFrame.new(o.Position) * rot * (o - o.Position)
-end
-
 local function stopFly()
-    local wasFlying = flyBV ~= nil
     if flyConnection then
         flyConnection:Disconnect()
         flyConnection = nil
     end
     if flyBV then flyBV:Destroy() flyBV = nil end
     if flyBG then flyBG:Destroy() flyBG = nil end
-
-    restoreMotors()
-    if flyAnimateScript and flyAnimateScript.Parent then
-        flyAnimateScript.Disabled = false
-    end
-    flyAnimateScript = nil
-    smoothCF = nil
-    poseBlend = 0
-
     local char = player.Character
     local humanoid = char and char:FindFirstChildOfClass("Humanoid")
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    -- Wieder aufrecht hinstellen (sonst bleibt man waagerecht liegen)
-    if wasFlying and root then
-        local look = workspace.CurrentCamera.CFrame.LookVector
-        local flat = Vector3.new(look.X, 0, look.Z)
-        if flat.Magnitude < 0.01 then flat = Vector3.new(0, 0, -1) end
-        root.CFrame = CFrame.lookAt(root.Position, root.Position + flat.Unit)
-    end
     if humanoid then
         humanoid.PlatformStand = false
         humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
@@ -437,17 +367,6 @@ local function startFly()
 
     humanoid.PlatformStand = true
 
-    -- Standard-Animationen pausieren, damit sie die Superman-Pose nicht überschreiben
-    flyAnimateScript = char:FindFirstChild("Animate")
-    if flyAnimateScript then flyAnimateScript.Disabled = true end
-    for _, track in ipairs(humanoid:GetPlayingAnimationTracks()) do
-        track:Stop(0)
-    end
-
-    collectMotors(char)
-    poseBlend = 0
-    smoothCF = root.CFrame - root.CFrame.Position
-
     flyBV = Instance.new("BodyVelocity")
     flyBV.MaxForce = Vector3.new(9e9, 9e9, 9e9)
     flyBV.Velocity = Vector3.zero
@@ -456,11 +375,10 @@ local function startFly()
     flyBG = Instance.new("BodyGyro")
     flyBG.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
     flyBG.P = 9e4
-    flyBG.D = 1000
     flyBG.CFrame = root.CFrame
     flyBG.Parent = root
 
-    flyConnection = runService.RenderStepped:Connect(function(dt)
+    flyConnection = runService.RenderStepped:Connect(function()
         if not flyEnabled or not root.Parent then return end
         local cam = workspace.CurrentCamera
 
@@ -476,57 +394,12 @@ local function startFly()
         if flyUp then velocity = velocity + Vector3.new(0, 1, 0) end
         if flyDown then velocity = velocity - Vector3.new(0, 1, 0) end
 
-        local moving = velocity.Magnitude > 0.01
-        local dir = nil
-        if moving then
-            dir = velocity.Unit
-            velocity = dir * flySpeed
-        end
-
-        -- Kamera-Blickrichtung (nur waagerecht) für die Idle-Haltung
-        local camLook = cam.CFrame.LookVector
-        local flatLook = Vector3.new(camLook.X, 0, camLook.Z)
-        if flatLook.Magnitude < 0.01 then
-            flatLook = Vector3.new(cam.CFrame.UpVector.X, 0, cam.CFrame.UpVector.Z)
-        end
-        if flatLook.Magnitude < 0.01 then flatLook = Vector3.new(0, 0, -1) end
-        flatLook = flatLook.Unit
-
-        -- Superman-Flug nur bei Vorwärts-/Seiten-/Auf-Ab-Bewegung, rückwärts = Idle-Haltung
-        local superman = moving and dir:Dot(camLook) > -0.3
-
-        local targetCF
-        if superman then
-            -- Kopf zeigt in Flugrichtung, Brust nach unten
-            local look = Vector3.new(0, -1, 0) + dir * dir.Y
-            if look.Magnitude < 0.1 then
-                look = flatLook
-            else
-                look = look.Unit
-            end
-            local back = -look
-            targetCF = CFrame.fromMatrix(Vector3.zero, dir:Cross(back), dir, back)
-        else
-            -- Aufrecht, leicht nach vorne gelehnt
-            targetCF = CFrame.lookAt(Vector3.zero, flatLook) * CFrame.Angles(-0.2, 0, 0)
-        end
-
-        -- Sanfte Übergänge zwischen Schweben und Fliegen
-        local alpha = 1 - math.exp(-dt * 10)
-        smoothCF = smoothCF and smoothCF:Lerp(targetCF, alpha) or targetCF
-        poseBlend = poseBlend + ((superman and 1 or 0) - poseBlend) * alpha
-
-        for key, idlePose in pairs(IDLE_POSE) do
-            setJointRotation(key, idlePose:Lerp(FLY_POSE[key], poseBlend))
-        end
-
-        -- Beim Schweben leichtes Auf und Ab
-        if not moving then
-            velocity = Vector3.new(0, math.sin(tick() * 2) * 1.2, 0)
+        if velocity.Magnitude > 0 then
+            velocity = velocity.Unit * flySpeed
         end
 
         flyBV.Velocity = velocity
-        flyBG.CFrame = smoothCF
+        flyBG.CFrame = cam.CFrame
     end)
 end
 
@@ -1653,6 +1526,18 @@ local function teleportToPlayer(plr)
     UI:Notify({ title = "Teleport", text = "Zu " .. plr.Name .. " teleportiert!", duration = 2 })
 end
 
+local function bringPlayerToMe(plr)
+    if not plr then return false end
+    local myChar = player.Character
+    local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+    local targetChar = plr.Character
+    local targetRoot = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
+    if not myRoot or not targetRoot then return false end
+    -- 4 Studs vor dich
+    targetRoot.CFrame = myRoot.CFrame * CFrame.new(0, 0, -4)
+    return true
+end
+
 local okDropdown, dropdownObj = pcall(function()
     return TeleportSection:addDropdown({
         title = "Spieler auswählen",
@@ -1718,6 +1603,33 @@ TeleportSection:addButton({
 })
 
 TeleportSection:addButton({
+    title = "Ausgewählten Spieler zu mir holen",
+    callback = function()
+        local plr = findPlayerByName(selectedPlayerName)
+        if not plr then
+            UI:Notify({ title = "Teleport", text = "Kein Spieler ausgewählt!", duration = 2 })
+        elseif bringPlayerToMe(plr) then
+            UI:Notify({ title = "Teleport", text = plr.Name .. " zu dir geholt!", duration = 2 })
+        else
+            UI:Notify({ title = "Teleport", text = "Spieler oder Charakter nicht bereit!", duration = 2 })
+        end
+    end
+})
+
+TeleportSection:addButton({
+    title = "Alle Spieler zu mir holen",
+    callback = function()
+        local count = 0
+        for _, plr in ipairs(game.Players:GetPlayers()) do
+            if plr ~= player and bringPlayerToMe(plr) then
+                count = count + 1
+            end
+        end
+        UI:Notify({ title = "Teleport", text = count .. " Spieler zu dir geholt!", duration = 2 })
+    end
+})
+
+TeleportSection:addButton({
     title = "Spielerliste aktualisieren",
     callback = function()
         refreshPlayerList()
@@ -1725,21 +1637,12 @@ TeleportSection:addButton({
     end
 })
 
--- Liste automatisch aktuell halten
-game.Players.PlayerAdded:Connect(function()
-    task.wait(0.3)
-    refreshPlayerList()
-end)
-game.Players.PlayerRemoving:Connect(function()
-    task.wait(0.3)
-    refreshPlayerList()
-end)
 -- ==================== ENDE UTILITY TAB ====================
 
 -- ==================== ABOUT TAB ====================
 local AboutInfo = {
     Creator = "Leland",
-    Version = "v1.2.0",            -- <- bei jedem Update ändern
+    Version = "v1.2.1",            -- <- bei jedem Update ändern
     Updated = "29.09.2026",        -- <- Datum des letzten Updates
     Game    = "Murder Mystery 2",
     Discord = "discord.gg/rSkMxB5bx7"
@@ -1773,10 +1676,10 @@ local function featureLine(text)
     })
 end
 
-featureLine("Player: Speed, Jump, Gravity, Noclip, Fly (Superman-Animation)")
+featureLine("Player: Speed, Jump, Gravity, Noclip, Fly")
 featureLine("Combat: Spieler-ESP, GunDrop-ESP, Aimbot")
 featureLine("Visuals: Fog, Transparenz, FOV, Monochrome")
-featureLine("Utility: Teleport zu Spielern")
+featureLine("Utility: Teleport zu Spielern / Spieler zu mir")
 
 -- Steuerung-Abschnitt
 local ControlSection = AboutPage:addSection({ title = "Steuerung" })
