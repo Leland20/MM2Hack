@@ -481,7 +481,7 @@ local GunColor = Color3.fromRGB(0, 100, 255)
 local KnifeColor = Color3.fromRGB(255, 0, 0)
 local NoneColor = Color3.fromRGB(0, 255, 0)
 local showFriends = true
-local FriendColor = Color3.fromRGB(255, 200, 0)
+local FriendColor = Color3.fromRGB(255, 0, 201)
 local friendCache = {}   -- [Spieler] = true/false (Roblox-Freund?)
 local FillTransparency = 0.5
 local OutlineTransparency = 0.2
